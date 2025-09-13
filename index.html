@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>QR Code Generator & Reader</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 700px; margin: 32px auto; background: #f5f5f5; }
+    h1 { text-align: center; }
+    section { background: #fff; padding: 16px 24px; margin-bottom: 20px; border-radius: 10px; box-shadow: 0 2px 8px #0001;}
+    label { display: block; margin-top: 12px; font-weight: bold; }
+    input[type="text"], textarea { width: 100%; padding: 8px; margin-top: 4px; border-radius: 4px; border: 1px solid #aaa; }
+    button { margin-top: 12px; padding: 8px 20px; border: none; border-radius: 4px; background: #0078d7; color: #fff; font-size: 1rem; cursor: pointer; }
+    button:hover { background: #005a9e; }
+    #qr-canvas, #camera-canvas { display: none; }
+    img.qr { margin-top: 12px; }
+    .output { margin-top: 12px; padding: 8px; background: #e4ffe4; border-radius: 6px;}
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .col { flex: 1 1 220px; min-width: 220px; }
+    video { width: 100%; border-radius: 8px; margin-top: 10px; }
+    .small { font-size: 0.85em; color: #444; }
+  </style>
+</head>
+<body>
+  <h1>QR Code Generator & Reader</h1>
+
+  <section>
+    <h2>QR Code Generieren</h2>
+    <div class="row">
+      <div class="col">
+        <label for="qr-input">Text/Link eingeben:</label>
+        <input type="text" id="qr-input" placeholder="Text oder URL">
+        <div class="small">Oder lade eine Datei hoch:</div>
+        <input type="file" id="qr-upload" accept=".txt,.pdf,image/*">
+        <button onclick="generateQR()">QR Code generieren</button>
+      </div>
+      <div class="col" id="qr-output"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>QR Code Lesen</h2>
+    <div class="row">
+      <div class="col">
+        <label for="qr-file">QR-Bild hochladen:</label>
+        <input type="file" id="qr-file" accept="image/*">
+        <button onclick="scanQR()">Bild scannen</button>
+        <div class="small">oder per Kamera scannen:</div>
+        <button onclick="toggleCamera()">Kamera Scannen</button>
+        <video id="camera-preview" autoplay playsinline style="display:none"></video>
+        <canvas id="camera-canvas"></canvas>
+      </div>
+      <div class="col">
+        <div id="qr-result" class="output"></div>
+      </div>
+    </div>
+    <canvas id="qr-canvas"></canvas>
+  </section>
+
+  <!-- QRCode.js für QR-Generierung -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs/qrcode.min.js"></script>
+  <!-- jsQR für QR-Code-Lesen -->
+  <script src="https://cdn.jsdelivr.net/npm/jsqr/dist/jsQR.js"></script>
+  <script>
+    // Generieren
+    function generateQR() {
+      const container = document.getElementById('qr-output');
+      container.innerHTML = '';
+      const text = document.getElementById('qr-input').value.trim();
+      const file = document.getElementById('qr-upload').files[0];
+
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          let data;
+          if (file.type.startsWith('text/')) {
+            data = e.target.result;
+          } else {
+            // Bild, PDF, etc. als base64
+            data = `FILE:${file.name}:${file.type};base64,${btoa(e.target.result)}`;
+          }
+          showQR(data, container);
+        };
+        if (file.type.startsWith('text/')) {
+          reader.readAsText(file);
+        } else {
+          reader.readAsBinaryString(file);
+        }
+      } else if (text) {
+        showQR(text, container);
+      } else {
+        container.innerHTML = '<span style="color:red;">Bitte Text eingeben oder Datei hochladen.</span>';
+      }
+    }
+
+    function showQR(data, container) {
+      const qr = document.createElement('div');
+      qr.id = "qrcode";
+      container.appendChild(qr);
+      new QRCode(qr, {
+        text: data,
+        width: 200,
+        height: 200
+      });
+    }
+
+    // QR aus Bilddatei lesen
+    function scanQR() {
+      const fileInput = document.getElementById('qr-file');
+      const canvas = document.getElementById('qr-canvas');
+      const result = document.getElementById('qr-result');
+      result.innerHTML = '';
+      if (fileInput.files.length === 0) {
+        result.innerHTML = '<span style="color:red;">Bitte ein Bild auswählen.</span>';
+        return;
+      }
+      const file = fileInput.files[0];
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const img = new Image();
+        img.onload = function() {
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, img.width, img.height);
+          const imageData = ctx.getImageData(0, 0, img.width, img.height);
+          const code = jsQR(imageData.data, imageData.width, imageData.height);
+          if (code) {
+            result.innerHTML = `<strong>Erkannter QR-Code:</strong><br>${escapeHTML(code.data)}`;
+          } else {
+            result.innerHTML = '<span style="color:red;">Kein QR Code gefunden.</span>';
+          }
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    // Kamera-Funktionen
+    let cameraActive = false;
+    let cameraStream = null;
+    let cameraScanInterval = null;
+
+    function toggleCamera() {
+      const video = document.getElementById('camera-preview');
+      const canvas = document.getElementById('camera-canvas');
+      const result = document.getElementById('qr-result');
+      if (!cameraActive) {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          alert('Kamera wird von diesem Gerät/Browser nicht unterstützt!');
+          return;
+        }
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+          .then((stream) => {
+            cameraStream = stream;
+            video.srcObject = stream;
+            video.style.display = '';
+            video.play();
+            cameraActive = true;
+            cameraScanInterval = setInterval(() => {
+              if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const code = jsQR(imageData.data, imageData.width, imageData.height);
+                if (code) {
+                  result.innerHTML = `<strong>Erkannter QR-Code (Kamera):</strong><br>${escapeHTML(code.data)}`;
+                  stopCamera();
+                }
+              }
+            }, 400);
+          })
+          .catch((err) => {
+            alert('Kamera konnte nicht geöffnet werden: ' + err);
+          });
+      } else {
+        stopCamera();
+      }
+    }
+
+    function stopCamera() {
+      const video = document.getElementById('camera-preview');
+      video.pause();
+      video.srcObject = null;
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+        cameraStream = null;
+      }
+      if (cameraScanInterval) clearInterval(cameraScanInterval);
+      cameraActive = false;
+      video.style.display = 'none';
+    }
+
+    // Hilfsfunktion zum Escapen
+    function escapeHTML(str) {
+      return str.replace(/[&<>"']/g, function(m) {
+        return ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+        })[m];
+      });
+    }
+  </script>
+</body>
+</html>
